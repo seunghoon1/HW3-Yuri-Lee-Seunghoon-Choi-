@@ -1,0 +1,332 @@
+---
+title: "PS3"
+author: "Yuri Lee, Seunghoon Choi"
+date: '2021 4 7 '
+output:
+  pdf_document: default
+  word_document: default
+---
+
+# 1. What causes what?
+
+### 1) The city with high crime rate tends to hire more policemen. The number of policemen explains the crime rate, and the crime rate explains the number of policemen(endogeneity). The result of the regression of “Crime” on “Police” may show that more policemen, higher crime rate. 
+
+### 2) The researchers from UPenn used the variables which are not related to the crime rate. They used the terrorism alert system as an instrumental variable. When the terror alert level goes high, more policemen are thrown in. So, the researchers can find the effect of the additional policemen on the crime. The first column of table 2 shows the effect of police on crime by using "High Alert" variable. This says that additional input of policemen is associated with decrease of the crime rate by 7.316(p-value is significant at 5% level).
+
+### 3) The terror alert can decrease the number of people who might be potential targets of crime, which makes crime rate go down as well. Additional policemen and decreased number of people(such as tourists) can decrease crime simultaneously. So, the researchers split effects of the number of potential victims on crime by using the metro ridership. The second column of table 2 shows the effect of police and victim on crime. The effect of additional policemen on the lower crime is around 6(less than Q.2). Since fewer potential victims also are related to less crimes.
+
+### 4) Table 4 shows the interaction variables between high alert and districts. The interaction variables show more precise effect of police on crime. When high alert was announced in the district 1, and additional police force was input there, the daily total number of crimes decreased by 2.6 with a significant level of p-value. However, if high alert was announced in other area and police force was dispatched there, there was no significant level of effects on the crime in the district 1. The results show that only the area where had additional police force experienced crime decrease, which means additional police force caused decrease of crime.
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 2. Predictive model building: green certification
+```{r, include=FALSE}
+library(tidyverse)
+library(mosaic)
+library(foreach)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ggplot2)
+library(caret)
+library(parallel)
+library(foreach)
+library(modelr)
+library(rsample)
+library(gbm)
+library(pdp)
+
+greenbuildings = read.csv('C:/users/CHOI/Desktop/greenbuildings.csv')
+
+```
+
+## 1) Overview
+Our goal is to build the best predictive model for revenue(per square foot per calendar year).
+In order to get best model, we will use 'Step wise', 'CART', 'Random Forests', Boosting' models, and compare the RMSE of these models.
+And by using this model, we will quantify the average change in rental income associated with green certification.
+We chose 'green_rating' as "green certified" category, rather than 'LEED' and 'Energystar'
+
+
+## 2) Data and model
+
+### 2-1) data cleansing
+In data, 74 rows have omitted in 'empl_gr' variable, so we omit them
+```{r, include=FALSE}
+nrow(greenbuildings)
+length(which(complete.cases(greenbuildings)=="FALSE"))
+greenbuildings = na.omit(greenbuildings)
+```
+
+### 2-2) mutation of 'revenue', using 17 variables
+The revenue per square foot per year is the product of two terms: rent and leasing_rate.
+So, we apply 'revenue = Rent * (leasing_rate/100)' to models
+```{r, echo=FALSE}
+green = greenbuildings %>%
+  mutate(revenue = Rent * (leasing_rate/100))
+```
+
+### 2-3) fit models
+First, data split to training and testing
+```{r, echo=FALSE}
+green_split = initial_split(green, prop=0.8)
+green_train = training(green_split)
+green_test = testing(green_split)
+```
+
+Second, we built 'Step wise', 'CART', 'Random Forests', Boosting' models.
+And we used 17 variables, except 3 variables(LEED, Energystar, cluster)
+
+
+```{r, include=FALSE}
+lm_0 = lm(revenue ~ 1, data = green_train)
+green.step = step(lm_0, direction='forward',
+             scope = ~ (size + empl_gr + stories + age + 
+                          renovated + class_a + class_b + green_rating + net + amenities +
+                          cd_total_07 + hd_total07 + total_dd_07 + Precipitation + 
+                          Gas_Costs + Electricity_Costs + cluster_rent)^2)
+
+
+green.tree = rpart(revenue ~ size + empl_gr + stories + age + 
+                     renovated + class_a + class_b + green_rating + net + amenities +
+                     cd_total_07 + hd_total07 + total_dd_07 + Precipitation + 
+                     Gas_Costs + Electricity_Costs + cluster_rent,
+                   data=green_train, control = rpart.control(cp = 0.00001))
+
+
+green.forest = randomForest(revenue ~ size + empl_gr + stories + age + 
+                              renovated + class_a + class_b + green_rating + net + amenities +
+                              cd_total_07 + hd_total07 + total_dd_07 + Precipitation + 
+                              Gas_Costs + Electricity_Costs + cluster_rent,
+                            data=green_train, importance = TRUE)
+
+green.boost = gbm(revenue ~ size + empl_gr + stories + age + 
+                    renovated + class_a + class_b + green_rating + net + amenities +
+                    cd_total_07 + hd_total07 + total_dd_07 + Precipitation + 
+                    Gas_Costs + Electricity_Costs + cluster_rent,
+                  data = green_train,
+                  interaction.depth=4, n.trees=500, shrinkage=.05)
+```
+
+
+## 3) Results
+
+### 3-1) compare the RMSE of 4 models
+The RMSE of 'Random Forests' model is lowest, so we select 'Random Forests' model.
+
+
+a) Step wise
+```{r, echo=FALSE, message=FALSE}
+rmse(green.step, green_test)
+```
+b) CART
+```{r, echo=FALSE, message=FALSE}
+rmse(green.tree, green_test)
+```
+c) Random Forests
+```{r, echo=FALSE, message=FALSE}
+rmse(green.forest, green_test)
+```
+d) Boosting
+```{r, echo=FALSE, message=FALSE}
+rmse(green.boost, green_test)
+```
+
+### 3-2) partial effect of 'green_rating'
+
+Partial effect of 'green_rating' is small (around 0.7 unit)
+
+```{r, fig.align='center', echo=FALSE}
+p_forest = partial(green.forest, pred.var = 'green_rating')
+p_forest
+partialPlot(green.forest, green_test, 'green_rating', las=1)
+```
+
+
+In 'Boosting' model, the partial value of 'green_rating' is simillar to that of 'Random Forests' model (around 0.8 unit)
+```{r, fig.align='center', echo=FALSE}
+p_boost = partial(green.boost, pred.var = 'green_rating', n.trees=150)
+p_boost
+ggplot(p_boost) + geom_line(mapping=aes(x=green_rating, y=yhat))
+```
+
+In variable importance measures, 'green_rating' variable is less important than other variables.
+```{r, fig.align='center', echo=FALSE}
+varImpPlot(green.forest, type=1)
+```
+
+
+
+
+## 4) Conclusion
+In order to get best model, we used 'Step wise', 'CART', 'Random Forests', Boosting' models.
+The RMSE of 'Random Forests' model is lowest, so we selected 'Random Forests' model.
+And by using this model, we quantified the average change in rental income('revenue') associated with 'green_rating'.
+Lastly, we calculated partial effect of 'green_rating', the value is small. And 'green_rating' is less important than other variables. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 3. Predictive model building: California housing
+```{r, include=FALSE}
+library(mosaic)
+library(tidyverse)
+library(ggplot2)
+library(foreach)
+library(parallel)
+library(caret)
+library(modelr)
+library(rsample)
+library(dplyr)
+library(randomForest)
+library(gbm)
+library(pdp)
+library(rpart)
+library(rpart.plot)
+library(lubridate)
+
+
+CAhousing = read.csv('C:/users/CHOI/Desktop/CAhousing.csv')
+```
+## 1) Overview
+The purpose of this analysis is to fit the prediction model for median housing price.
+The data contains 20,640 observations about housing tract in California with nine variables.
+We can guess that house price would be highly related with median income among variables,
+and especially, the interaction variable between latitude and longitude would be dominating effect on house price from the scatter plot.
+So, we started fitting the prediction model for house price with these three variables.
+
+## 2) Data featuring and data exploring
+We added new variables: averageRooms, averageBedrooms and unitBedrooms using mutate command,
+and, scanned the relations betwwen medianHousingValue and other variables.
+When we plot the data to show medainHouseValue versus longitude(x) and latitude(y), we could see the distriubution of medianHousingValue on geographical grid. 
+
+### 2-1) data featuring
+ We mutated 'averageRooms = totalRooms/households', 'averageBedrooms = totalBedrooms/households',
+         'unitBedrooms = totalBedrooms/population'
+```{r, echo=FALSE}
+d1= CAhousing %>%
+  mutate(averageRooms = totalRooms/households, averageBedrooms = totalBedrooms/households,
+         unitBedrooms = totalBedrooms/population)
+```
+
+### 2-2) data explore
+```{r, fig.asp = 0.4, fig.align='center', echo=FALSE}
+ggplot(data=d1) +
+  geom_point(aes(x=housingMedianAge, y=medianHouseValue))
+
+ggplot(data=d1) +
+  geom_point(aes(x=averageRooms, y=medianHouseValue))
+
+ggplot(data=d1) +
+  geom_point(aes(x=averageBedrooms, y=medianHouseValue))
+
+ggplot(data=d1) +
+  geom_point(aes(x=medianIncome, y=medianHouseValue))
+
+ggplot(data=d1) +
+  geom_point(aes(x=longitude, y=latitude))
+```
+
+### 2-3) scatter plot
+```{r, echo=FALSE}
+d2 = d1 %>%
+  mutate(quantilegroup = ntile(medianHouseValue, 10))
+
+ggplot(data = d2) +
+  geom_point(aes(x=longitude, y=latitude, color=quantilegroup))
+```
+
+## 3) fitting models
+In order to fit the prediction model, we did multiple data splits, and fitted several linear model using stepwise selection.
+Then, we calculated out-of-sample rmses from the models. We could get the average rmses from three models.
+
+### 3-1) data split
+we split data into training and testing
+```{r, echo=FALSE}
+CA_split = initial_split(d2, prop=0.8)
+CA_train = training(CA_split)
+CA_test = testing(CA_split)
+```
+
+### 3-2) Fit linear models: base model & step wise selection with AIC
+```{r, include=FALSE}
+lm1 = lm(medianHouseValue ~ poly(medianIncome, 2) + longitude:latitude, 
+         data=CA_train)
+
+lm2 = lm(medianHouseValue ~ poly(medianIncome, 2) + longitude:latitude +
+           unitBedrooms, data=CA_train)
+
+lm_step = step(lm2, scope = ~(.)^2)
+
+lm3 = lm(medianHouseValue ~ poly(medianIncome, 2) + longitude:latitude + 
+  longitude:latitude:unitBedrooms + poly(medianIncome, 2):longitude:latitude + 
+  poly(medianIncome, 2):longitude:latitude:unitBedrooms, data=CA_train)
+```
+
+### 3-3) Averaging the performance over 10 train/test splits
+```{r, echo=FALSE, message=FALSE}
+rmse_sim = do(10)*{
+  CA_split =  initial_split(d2, prop=0.8)
+  CA_train = training(CA_split)
+  CA_test  = testing(CA_split)
+  
+  lm1 = update(lm1, data=CA_train)
+  lm2 = update(lm2, data=CA_train)
+  lm3 = update(lm3, data=CA_train)
+  
+  model_errors = c(rmse(lm1, CA_test), 
+                   rmse(lm2, CA_test), 
+                   rmse(lm3, CA_test))
+  
+  model_errors
+}
+
+colMeans(rmse_sim)
+```
+
+## 4) Prediction with the step wise(lm3) model and plot the predictions and errors
+
+If we predict for medianHousingValue with test set, we can get a plot of predictions as below.
+Also, we can calculate and plot the error term(mse) from it
+
+```{r, echo=FALSE}
+d5 = CA_test %>%
+  mutate(medianHouseValue_pred_test = predict(lm3, CA_test))
+
+d6 = d5 %>%
+  mutate(quantilegroup_pred_test = ntile(medianHouseValue_pred_test, 10))
+ggplot(data=d6) +
+  geom_point(aes(x=longitude, y=latitude, color=quantilegroup_pred_test))
+
+d6 = d5 %>%
+  mutate(mse_test = (medianHouseValue_pred_test - medianHouseValue)^2)
+
+ggplot(data = d6) +
+  geom_point(aes(x=longitude, y=latitude, color=mse_test))
+```
+
+## 5) Conclusion
+
+We can get low level of errors through the overall test data set, which means the model we fit can generally predict the median housing values well.
+
